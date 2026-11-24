@@ -1,0 +1,15 @@
+# Virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local database (created automatically on startup)
+*.db
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -58,3 +58,38 @@ def test_delete_expense(client):
     missing_res = client.delete("/expenses/9999")
     assert missing_res.status_code == 404
     assert missing_res.json()["detail"] == "Expense not found"
+
+def test_deleted_expense_is_gone(client):
+    """A deleted expense can no longer be fetched or listed."""
+    expense_id = client.post("/expenses/", json={"title": "Old", "amount": 1.00, "category": "Misc", "date_incurred": "2026-10-17"}).json()["id"]
+
+    client.delete(f"/expenses/{expense_id}")
+
+    assert client.get(f"/expenses/{expense_id}").status_code == 404
+    assert client.get("/expenses/").json() == []
+
+
+def test_read_single_expense(client):
+    """GET by ID returns the expense, or 404 when it doesn't exist."""
+    expense_id = client.post("/expenses/", json={"title": "Book", "amount": 12.00, "category": "School", "date_incurred": "2026-10-17"}).json()["id"]
+
+    response = client.get(f"/expenses/{expense_id}")
+    assert response.status_code == 200
+    assert response.json()["title"] == "Book"
+
+    assert client.get("/expenses/9999").status_code == 404
+
+
+def test_date_range_sorting_and_pagination(client):
+    """Filter by date range, sort by amount, and page through results."""
+    for title, amount, day in [("A", 5.0, "2026-10-01"), ("B", 20.0, "2026-10-10"), ("C", 10.0, "2026-10-20"), ("D", 1.0, "2026-11-05")]:
+        client.post("/expenses/", json={"title": title, "amount": amount, "category": "Food", "date_incurred": day})
+
+    in_october = client.get("/expenses/?start_date=2026-10-01&end_date=2026-10-31").json()
+    assert {e["title"] for e in in_october} == {"A", "B", "C"}
+
+    by_amount = client.get("/expenses/?sort_by=amount&order=asc").json()
+    assert [e["title"] for e in by_amount] == ["D", "A", "C", "B"]
+
+    page_two = client.get("/expenses/?sort_by=amount&order=asc&limit=2&offset=2").json()
+    assert [e["title"] for e in page_two] == ["C", "B"]
