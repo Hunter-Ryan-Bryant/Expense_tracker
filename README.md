@@ -34,7 +34,7 @@ Expense_tracker/
 ├── database.py        # SQLite engine and session setup
 ├── conftest.py        # pytest fixtures: in-memory SQLite + dependency override
 ├── test_expenses.py   # API test suite
-├── smoke_test.py      # Manual check against a running server (not run by pytest)
+├── manual_smoke_check.py  # Manual check against a running server: python manual_smoke_check.py
 ├── requirements.txt
 └── README.md
 expense_tracker/
@@ -79,7 +79,7 @@ Interactive docs are generated automatically at `/docs` once the server is runni
 ## 🏁 Getting Started
 
 ```bash
-git clone https://github.com/rm9v27j9jv-collab/Expense_tracker.git
+git clone https://github.com/Hunter-Ryan-Bryant/Expense_tracker.git
 cd Expense_tracker
 python -m venv .venv
 .venv\Scripts\activate          # Windows; on macOS/Linux: source .venv/bin/activate
