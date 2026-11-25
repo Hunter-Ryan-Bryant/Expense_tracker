@@ -7,6 +7,12 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
+# Local database (created automatically on startup)
+*.db
+
+# OS files
+.DS_Store
+Thumbs.db
 # Local database
 *.db
 
