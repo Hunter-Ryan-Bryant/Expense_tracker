@@ -42,12 +42,14 @@ def read_expenses(category: Optional[str] = None, start_date: Optional[date] = N
     expenses = session.exec(statement).all()
     return expenses
 
+
 @app.get("/expenses/{expense_id}", response_model=ExpenseRead)
 def read_expense(expense_id: int, session: Session = Depends(get_session)):
     expense = session.get(Expense, expense_id)
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
     return expense
+
 
 @app.delete("/expenses/{expense_id}")
 def delete_expense(expense_id: int, session: Session = Depends(get_session)):
