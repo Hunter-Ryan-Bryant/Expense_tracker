@@ -4,7 +4,7 @@ from datetime import date
 
 class ExpenseBase(SQLModel):
     title: str = Field(index=True)
-    amount: float
+    amount: float = Field(gt=0)
     category: str = "General"
     date_incurred: date = Field(default_factory=date.today)
 
@@ -18,6 +18,6 @@ class ExpenseRead(ExpenseBase):
     id: int
 class ExpenseUpdate(SQLModel):
     title: Optional[str] = None
-    amount: Optional[float] = None
+    amount: Optional[float] = Field(default=None, gt=0)
     category: Optional[str] = None
     date_incurred: Optional[date] = None
