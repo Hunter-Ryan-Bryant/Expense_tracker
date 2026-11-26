@@ -433,3 +433,133 @@ def test_summary_supports_search(client):
         {"key": "Groceries", "total": "12.25", "count": 1},
         {"key": "Food", "total": "4.50", "count": 1},
     ]
+
+
+# ---------- CSV export ----------
+
+def export_rows(client, **params):
+    """Download the CSV and parse it like a spreadsheet app would."""
+    import csv
+    import io
+
+    res = client.get("/expenses/export.csv", params=params)
+    assert res.status_code == 200
+    return list(csv.reader(io.StringIO(res.content.decode("utf-8-sig"), newline="")))
+
+
+def test_export_csv_headers_and_download_name(client):
+    from datetime import date
+
+    res = client.get("/expenses/export.csv")
+
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "text/csv; charset=utf-8"
+    assert res.headers["content-disposition"] == f'attachment; filename="expenses-{date.today().isoformat()}.csv"'
+    assert res.content.startswith(b"\xef\xbb\xbf")  # UTF-8 BOM so Excel reads accents correctly
+
+
+def test_export_empty_has_only_header(client):
+    assert export_rows(client) == [["id", "title", "amount", "category", "date_incurred"]]
+
+
+def test_export_rows_with_exact_amounts(client):
+    a = add(client, "Coffee", "4.5", "Food", "2026-10-01")
+    b = add(client, "Gas", 40, "Transport", "2026-10-02")
+
+    rows = export_rows(client)
+
+    assert rows[1:] == [  # newest first, like the list endpoint
+        [str(b["id"]), "Gas", "40.00", "Transport", "2026-10-02"],
+        [str(a["id"]), "Coffee", "4.50", "Food", "2026-10-01"],
+    ]
+
+
+def test_export_uses_crlf_line_endings(client):
+    add(client, "Coffee", 4)
+    body = client.get("/expenses/export.csv").content.decode("utf-8-sig")
+    assert body.count("\r\n") == 2  # header + one row, standard CSV (RFC 4180) endings
+    assert "\n" not in body.replace("\r\n", "")  # no bare newlines
+
+
+def test_export_quotes_commas_quotes_and_newlines(client):
+    tricky = 'Dinner, "fancy"\nwith friends'
+    add(client, tricky, 30)
+
+    assert export_rows(client)[1][1] == tricky
+
+
+def test_export_keeps_unicode(client):
+    add(client, "Café ☕", 4, "Bébé")
+    row = export_rows(client)[1]
+    assert (row[1], row[3]) == ("Café ☕", "Bébé")
+
+
+@pytest.mark.parametrize("title", ["=HYPERLINK(\"http://evil\")", "+1+2", "-2+3", "@SUM(A1)"])
+def test_export_neutralizes_spreadsheet_formulas(client, title):
+    """Cells starting with = + - @ would run as formulas in Excel/Sheets (CSV injection)."""
+    add(client, title, 1, category=title[:50])
+
+    row = export_rows(client)[1]
+
+    assert row[1] == "'" + title
+    assert row[3] == "'" + title[:50]
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("\tcmd", "'\tcmd"),  # the API trims these, but rows added another way could have them
+        ("\rcmd", "'\rcmd"),
+        ("Coffee", "Coffee"),
+        ("", ""),
+    ],
+)
+def test_spreadsheet_safe(text, expected):
+    from main import spreadsheet_safe
+
+    assert spreadsheet_safe(text) == expected
+
+
+def test_export_leaves_normal_text_alone(client):
+    add(client, "Coffee - large", 4, "Food")
+    row = export_rows(client)[1]
+    assert (row[1], row[3]) == ("Coffee - large", "Food")
+
+
+def test_export_applies_filters_and_sorting(client):
+    add(client, "Coffee", 4, "Food", "2026-10-05")
+    add(client, "Coffee", 5, "Food", "2026-11-05")  # wrong month
+    add(client, "Big coffee", 9, "Food", "2026-10-20")
+    add(client, "Coffee maker", 60, "Home", "2026-10-06")  # wrong category
+    add(client, "Bagel", 3, "Food", "2026-10-07")  # doesn't match search
+
+    rows = export_rows(
+        client,
+        q="coffee",
+        category="food",
+        start_date="2026-10-01",
+        end_date="2026-10-31",
+        sort_by="amount",
+        order="asc",
+    )
+
+    assert [(r[1], r[2]) for r in rows[1:]] == [("Coffee", "4.00"), ("Big coffee", "9.00")]
+
+
+def test_export_is_not_paged(client):
+    for i in range(120):  # more than the list endpoint's default limit of 100
+        add(client, f"Item {i}", 1)
+    assert len(export_rows(client)) == 121
+
+
+@pytest.mark.parametrize(
+    "query", ["sort_by=title", "order=up", "start_date=2026-10-31&end_date=2026-10-01", "q=" + "x" * 101]
+)
+def test_export_rejects_bad_query_params(client, query):
+    assert client.get(f"/expenses/export.csv?{query}").status_code == 422
+
+
+def test_export_route_does_not_break_get_by_id(client):
+    expense = add(client, "Lunch", 12)
+    assert client.get("/expenses/export.csv").status_code == 200
+    assert client.get(f"/expenses/{expense['id']}").json() == expense

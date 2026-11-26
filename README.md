@@ -48,6 +48,7 @@ Expense_tracker/
 | `POST` | `/expenses/` | `201` | Create an expense |
 | `GET` | `/expenses/` | `200` | List expenses (query parameters below) |
 | `GET` | `/expenses/summary` | `200` | Totals and counts, overall and per category or month ([details](#spending-summary)) |
+| `GET` | `/expenses/export.csv` | `200` | Download matching expenses as a CSV file ([details](#csv-export)) |
 | `GET` | `/expenses/{id}` | `200` | Fetch one expense (404 if missing) |
 | `PATCH` | `/expenses/{id}` | `200` | Update only the fields you send (404 if missing) |
 | `DELETE` | `/expenses/{id}` | `204` | Delete an expense; empty response body (404 if missing) |
@@ -121,6 +122,22 @@ GET /expenses/summary?category=food&start_date=2026-10-01&end_date=2026-10-31
 - **By category:** groups go from largest total to smallest. Categories are matched ignoring case, so `Food` and `food` are one group, shown with the first spelling used.
 - **By month:** keys look like `"2026-10"` and go in date order.
 - **Nothing found:** you get `"total": "0.00"`, `"count": 0` and an empty `groups` list.
+
+### CSV export
+
+`GET /expenses/export.csv` downloads matching expenses as `expenses-YYYY-MM-DD.csv`, ready to open in Excel, Google Sheets or Numbers. You can open it straight from your browser, for example http://127.0.0.1:8000/expenses/export.csv?category=food.
+
+```csv
+id,title,amount,category,date_incurred
+2,Gas,40.00,Transport,2026-10-02
+1,Coffee,4.50,Food,2026-10-01
+```
+
+- **Filters and sorting:** accepts the same `q`, `category`, `start_date`, `end_date`, `sort_by` and `order` parameters as the list endpoint.
+- **No paging:** every matching expense is included.
+- **Amounts** are exact, with 2 decimals.
+- **Excel-friendly:** the file is UTF-8 with a byte-order mark (BOM) so Excel shows accents and emoji correctly. Commas, quotes and line breaks inside titles are quoted properly.
+- **Formula safety:** text that a spreadsheet would run as a formula, meaning it starts with `=`, `+`, `-` or `@`, gets a leading `'` so it displays as plain text. This guards against CSV injection.
 
 Interactive docs are generated automatically at `/docs` once the server is running.
 
