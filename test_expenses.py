@@ -1,3 +1,6 @@
+import pytest
+
+
 def test_create_expense(client):
     """Test creating a new expense via POST."""
     response = client.post(
@@ -10,9 +13,9 @@ def test_create_expense(client):
         }
     )
     data = response.json()
-    assert response.status_code == 200
+    assert response.status_code == 201
     assert data["title"] == "Morning Coffee"
-    assert data["amount"] == 4.50
+    assert data["amount"] == "4.50"  # money is sent as an exact 2-decimal string
     assert "id" in data
 
 
@@ -42,7 +45,7 @@ def test_update_expense(client):
     data = patch_res.json()
     
     assert patch_res.status_code == 200
-    assert data["amount"] == 3.00
+    assert data["amount"] == "3.00"
     assert data["title"] == "Snack"
 
 
@@ -52,8 +55,8 @@ def test_delete_expense(client):
     expense_id = post_res.json()["id"]
 
     delete_res = client.delete(f"/expenses/{expense_id}")
-    assert delete_res.status_code == 200
-    assert delete_res.json()["ok"] is True
+    assert delete_res.status_code == 204
+    assert delete_res.content == b""
 
     # The expense must actually be gone, not just reported as deleted.
     get_res = client.get(f"/expenses/{expense_id}")
@@ -123,3 +126,113 @@ def test_sort_by_amount_and_date_range(client):
     asc_res = client.get("/expenses/?sort_by=amount&order=asc&start_date=2026-01-01")
     titles = [e["title"] for e in asc_res.json()]
     assert titles == ["Small", "Big"]
+
+
+# ---------- exact money ----------
+
+def test_amounts_are_exact_two_decimal_strings(client):
+    """0.10 and 0.20 stay exact instead of drifting like floats (0.1 + 0.2 != 0.3)."""
+    a = client.post("/expenses/", json={"title": "A", "amount": 0.1}).json()
+    b = client.post("/expenses/", json={"title": "B", "amount": "0.20"}).json()
+
+    assert a["amount"] == "0.10"
+    assert b["amount"] == "0.20"
+
+
+def test_amounts_accept_numbers_and_strings(client):
+    assert client.post("/expenses/", json={"title": "Num", "amount": 4.5}).status_code == 201
+    assert client.post("/expenses/", json={"title": "Str", "amount": "4.50"}).status_code == 201
+
+
+@pytest.mark.parametrize("amount", [4.555, "0.001", "100000000.00", "abc"])
+def test_rejects_bad_amounts(client, amount):
+    """More than 2 decimals, over 10 digits, or not a number."""
+    assert client.post("/expenses/", json={"title": "Bad", "amount": amount}).status_code == 422
+
+
+# ---------- text fields ----------
+
+@pytest.mark.parametrize("field", ["title", "category"])
+@pytest.mark.parametrize("value", ["", "   "])
+def test_rejects_empty_text(client, field, value):
+    body = {"title": "Lunch", "amount": 10, "category": "Food", field: value}
+    assert client.post("/expenses/", json=body).status_code == 422
+
+
+def test_text_is_trimmed(client):
+    data = client.post("/expenses/", json={"title": "  Lunch  ", "amount": 10, "category": " Food "}).json()
+    assert data["title"] == "Lunch"
+    assert data["category"] == "Food"
+
+
+# ---------- PATCH ----------
+
+@pytest.mark.parametrize("field", ["title", "amount", "category", "date_incurred"])
+def test_patch_rejects_null_and_leaves_record_unchanged(client, field):
+    """Sending null used to crash the server with a 500."""
+    created = client.post("/expenses/", json={"title": "Keep", "amount": 5, "category": "Food", "date_incurred": "2026-10-17"}).json()
+
+    res = client.patch(f"/expenses/{created['id']}", json={field: None})
+
+    assert res.status_code == 422
+    assert client.get(f"/expenses/{created['id']}").json() == created
+
+
+def test_patch_rejects_empty_title(client):
+    expense_id = client.post("/expenses/", json={"title": "Keep", "amount": 5}).json()["id"]
+    assert client.patch(f"/expenses/{expense_id}", json={"title": "  "}).status_code == 422
+
+
+def test_patch_missing_expense_is_404(client):
+    assert client.patch("/expenses/9999", json={"amount": 1}).status_code == 404
+
+
+# ---------- list query parameters ----------
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "sort_by=amout",
+        "sort_by=title",
+        "order=up",
+        "limit=0",
+        "limit=-1",
+        "limit=501",
+        "offset=-1",
+    ],
+)
+def test_list_rejects_bad_query_params(client, query):
+    assert client.get(f"/expenses/?{query}").status_code == 422
+
+
+def test_list_rejects_reversed_date_range(client):
+    res = client.get("/expenses/?start_date=2026-10-31&end_date=2026-10-01")
+    assert res.status_code == 422
+    assert res.json()["detail"] == "start_date must be on or before end_date"
+
+
+def test_category_filter_ignores_case(client):
+    client.post("/expenses/", json={"title": "Latte", "amount": 5, "category": "Food"})
+    client.post("/expenses/", json={"title": "Gas", "amount": 40, "category": "Transport"})
+
+    for query in ["food", "FOOD", "Food", " food "]:
+        titles = [e["title"] for e in client.get("/expenses/", params={"category": query}).json()]
+        assert titles == ["Latte"], query
+
+
+def test_pagination_is_stable_when_amounts_tie(client):
+    ids = [client.post("/expenses/", json={"title": f"T{i}", "amount": 5}).json()["id"] for i in range(5)]
+
+    page1 = client.get("/expenses/?sort_by=amount&order=asc&limit=2").json()
+    page2 = client.get("/expenses/?sort_by=amount&order=asc&limit=2&offset=2").json()
+    page3 = client.get("/expenses/?sort_by=amount&order=asc&limit=2&offset=4").json()
+
+    assert [e["id"] for e in page1 + page2 + page3] == ids
+
+
+# ---------- setup ----------
+
+def test_tests_never_touch_the_real_database():
+    import database
+
+    assert database.engine.url.database in (None, "", ":memory:")

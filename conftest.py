@@ -1,10 +1,16 @@
-import pytest
-from fastapi.testclient import TestClient
-from sqlmodel import Session, SQLModel, create_engine
-from sqlmodel.pool import StaticPool
+import os
 
-from database import get_session
-from main import app
+# Must be set before importing the app: the app's startup creates tables on
+# database.engine, and this keeps that away from the real expenses.db.
+os.environ["EXPENSES_DATABASE_URL"] = "sqlite://"
+
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
+from sqlmodel.pool import StaticPool  # noqa: E402
+
+from database import get_session  # noqa: E402
+from main import app  # noqa: E402
 
 engine = create_engine(
     "sqlite:///:memory:",
@@ -12,12 +18,14 @@ engine = create_engine(
     poolclass=StaticPool,
 )
 
+
 @pytest.fixture(name="db_session")
 def db_session_fixture():
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
         yield session
     SQLModel.metadata.drop_all(engine)
+
 
 @pytest.fixture(name="client")
 def client_fixture(db_session):
