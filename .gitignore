@@ -13,8 +13,6 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
-# Local database
-*.db
 
 # Editor settings
 .vscode/

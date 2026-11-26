@@ -1,4 +1,3 @@
-
 # 💰 FastAPI Expense Tracker API
 
 A robust RESTful backend API built with **FastAPI**, **SQLModel**, and **Pydantic** for tracking, filtering, and managing personal expenses. Designed with automated testing in mind, featuring an isolated `pytest` suite and in-memory SQLite database fixtures.
@@ -29,21 +28,14 @@ A robust RESTful backend API built with **FastAPI**, **SQLModel**, and **Pydanti
 
 ```text
 Expense_tracker/
-├── main.py            # FastAPI app and route definitions
-├── models.py          # SQLModel table and Pydantic request/response schemas
-├── database.py        # SQLite engine and session setup
-├── conftest.py        # pytest fixtures: in-memory SQLite + dependency override
-├── test_expenses.py   # API test suite
-├── manual_smoke_check.py  # Manual check against a running server: python manual_smoke_check.py
+├── main.py                 # FastAPI app and route definitions
+├── models.py               # SQLModel table and Pydantic request/response schemas
+├── database.py             # SQLite engine and session setup
+├── conftest.py             # pytest fixtures: in-memory SQLite + dependency override
+├── test_expenses.py        # API test suite
+├── manual_smoke_check.py   # Manual check against a running server: python manual_smoke_check.py
 ├── requirements.txt
-└── README.md
-expense_tracker/
-├── main.py            # FastAPI app & route definitions
-├── models.py          # SQLModel table & Pydantic request/response schemas
-├── database.py        # Database engine & session setup
-├── conftest.py        # Pytest fixtures (in-memory SQLite override)
-├── test_expenses.py   # API endpoint test suite
-├── requirements.txt
+├── README.md
 └── .github/workflows/tests.yml   # Runs pytest on every push & PR
 ```
 
@@ -53,10 +45,10 @@ expense_tracker/
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/expenses/` | Create an expense |
+| `POST` | `/expenses/` | Create an expense (`amount` must be > 0) |
 | `GET` | `/expenses/` | List expenses. Query params: `category`, `start_date`, `end_date`, `sort_by` (`date_incurred` or `amount`), `order` (`asc` or `desc`), `limit`, `offset` |
 | `GET` | `/expenses/{id}` | Fetch one expense (404 if missing) |
-| `PATCH` | `/expenses/{id}` | Update only the fields you send |
+| `PATCH` | `/expenses/{id}` | Update only the fields you send (`amount` must be > 0) |
 | `DELETE` | `/expenses/{id}` | Delete an expense (404 if missing) |
 
 Example expense body:
@@ -64,13 +56,6 @@ Example expense body:
 ```json
 { "title": "Morning Coffee", "amount": 4.50, "category": "Food", "date_incurred": "2026-10-17" }
 ```
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/expenses/` | Create an expense (`amount` must be > 0) |
-| `GET` | `/expenses/` | List expenses. Query params: `category`, `start_date`, `end_date`, `sort_by` (`date_incurred` or `amount`), `order` (`asc`/`desc`), `limit`, `offset` |
-| `GET` | `/expenses/{id}` | Get one expense |
-| `PATCH` | `/expenses/{id}` | Partially update an expense |
-| `DELETE` | `/expenses/{id}` | Delete an expense |
 
 Interactive docs are generated automatically at `/docs` once the server is running.
 
@@ -92,22 +77,14 @@ Run the server:
 uvicorn main:app --reload
 ```
 
-Interactive API docs are at http://127.0.0.1:8000/docs. The SQLite database (`expenses.db`) is created automatically on first startup.
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn main:app --reload
-```
+Then open http://127.0.0.1:8000/docs. The SQLite database (`expenses.db`) is created automatically on first startup.
 
-Then open http://127.0.0.1:8000/docs.
+---
 
 ## 🧪 Running Tests
 
 ```bash
-python -m pytest
-```
-
-Tests use an in-memory SQLite database, so they never touch `expenses.db`.
-pytest -v
+python -m pytest -v
 ```
 
 Tests run against a fresh in-memory SQLite database, so they never touch `expenses.db`.
