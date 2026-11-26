@@ -33,10 +33,30 @@ def get_expense_or_404(session: Session, expense_id: int) -> Expense:
     return expense
 
 
-def apply_filters(statement, category: Optional[str], start_date: Optional[date], end_date: Optional[date]):
-    """Category (case-insensitive) and inclusive date-range filters shared by list and summary."""
+def clean_search(q: Optional[str]) -> Optional[str]:
+    """Trim the search text; blank means "no search"."""
+    q = q.strip() if q else ""
+    return q or None
+
+
+def title_contains(q: str):
+    """Case-insensitive "title contains q". % and _ are matched literally, not as LIKE wildcards."""
+    escaped = q.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return func.lower(Expense.title).like(f"%{escaped}%", escape="\\")
+
+
+def apply_filters(
+    statement,
+    category: Optional[str],
+    start_date: Optional[date],
+    end_date: Optional[date],
+    q: Optional[str] = None,
+):
+    """Search, category (case-insensitive) and inclusive date-range filters shared by list and summary."""
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+    if q:
+        statement = statement.where(title_contains(q))
     if category:
         statement = statement.where(func.lower(Expense.category) == category.strip().lower())
     if start_date:
@@ -55,8 +75,12 @@ def create_expense(expense: ExpenseCreate, session: Session = Depends(get_sessio
     return db_expense
 
 
+SEARCH_QUERY = Query(None, max_length=100, description='Case-insensitive "title contains" search')
+
+
 @app.get("/expenses/", response_model=list[ExpenseRead])
 def read_expenses(
+    q: Optional[str] = SEARCH_QUERY,
     category: Optional[str] = Query(None, description="Case-insensitive match"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
@@ -66,7 +90,7 @@ def read_expenses(
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_session),
 ):
-    statement = apply_filters(select(Expense), category, start_date, end_date)
+    statement = apply_filters(select(Expense), category, start_date, end_date, clean_search(q))
 
     sort_column = Expense.amount if sort_by == "amount" else Expense.date_incurred
     direction = desc if order == "desc" else asc
@@ -80,6 +104,7 @@ def read_expenses(
 @app.get("/expenses/summary", response_model=ExpenseSummary)
 def summarize_expenses(
     group_by: Literal["category", "month"] = "category",
+    q: Optional[str] = SEARCH_QUERY,
     category: Optional[str] = Query(None, description="Case-insensitive match"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
@@ -93,7 +118,8 @@ def summarize_expenses(
     "YYYY-MM" in date order.
     """
     statement = select(Expense.category, Expense.date_incurred, Expense.amount).order_by(Expense.id)
-    rows = session.exec(apply_filters(statement, category, start_date, end_date)).all()
+    q = clean_search(q)
+    rows = session.exec(apply_filters(statement, category, start_date, end_date, q)).all()
 
     groups: dict[str, dict] = {}
     for row_category, row_date, amount in rows:
@@ -112,6 +138,7 @@ def summarize_expenses(
 
     return ExpenseSummary(
         group_by=group_by,
+        q=q,
         category=category.strip() if category else None,
         start_date=start_date,
         end_date=end_date,

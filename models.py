@@ -65,6 +65,7 @@ class SummaryGroup(SQLModel):
 
 class ExpenseSummary(SQLModel):
     group_by: Literal["category", "month"]
+    q: Optional[str] = None
     category: Optional[str] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
