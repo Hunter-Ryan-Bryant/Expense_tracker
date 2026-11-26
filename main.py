@@ -1,3 +1,4 @@
+import calendar
 import csv
 import io
 from contextlib import asynccontextmanager
@@ -5,11 +6,16 @@ from datetime import date
 from decimal import Decimal
 from typing import Literal, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Response
 from sqlmodel import Session, asc, desc, func, select
 
 from database import create_db_and_tables, get_session
 from models import (
+    Budget,
+    BudgetOverview,
+    BudgetRead,
+    BudgetSet,
+    BudgetStatus,
     Expense,
     ExpenseCreate,
     ExpenseRead,
@@ -223,4 +229,134 @@ def update_expense(expense_id: int, expense_update: ExpenseUpdate, session: Sess
 @app.delete("/expenses/{expense_id}", status_code=204)
 def delete_expense(expense_id: int, session: Session = Depends(get_session)):
     session.delete(get_expense_or_404(session, expense_id))
+    session.commit()
+
+
+# ---------- budgets ----------
+
+MONTH_QUERY = Query(
+    None,
+    pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+    description='Month as "YYYY-MM" (defaults to the current month)',
+)
+CATEGORY_PATH = Path(min_length=1, max_length=50, description="Category name (case-insensitive)")
+
+
+def category_key(category: str) -> str:
+    """Normalize a category so "Food", "food" and " FOOD " share one budget."""
+    key = category.strip().lower()
+    if not key:
+        raise HTTPException(status_code=422, detail="Category can't be empty")
+    return key
+
+
+def month_bounds(month: Optional[str]) -> tuple[str, date, date]:
+    """Return ("YYYY-MM", first day, last day) for the month, or the current month if None."""
+    if month is None:
+        month = date.today().strftime("%Y-%m")
+    year, month_number = map(int, month.split("-"))
+    last_day = calendar.monthrange(year, month_number)[1]
+    return month, date(year, month_number, 1), date(year, month_number, last_day)
+
+
+def spending_by_category(session: Session, first: date, last: date) -> dict[str, Decimal]:
+    """Exact total spent per lowercased category between first and last (inclusive)."""
+    rows = session.exec(
+        select(Expense.category, Expense.amount).where(
+            Expense.date_incurred >= first, Expense.date_incurred <= last
+        )
+    ).all()
+    totals: dict[str, Decimal] = {}
+    for row_category, amount in rows:
+        key = row_category.lower()
+        totals[key] = totals.get(key, Decimal("0.00")) + amount
+    return totals
+
+
+def budget_status(budget: Budget, month: str, spent: Decimal) -> BudgetStatus:
+    percent = (spent / budget.monthly_limit * 100).quantize(Decimal("0.1"))
+    return BudgetStatus(
+        category=budget.category,
+        month=month,
+        monthly_limit=budget.monthly_limit,
+        spent=spent,
+        remaining=budget.monthly_limit - spent,
+        percent_used=float(percent),
+        over_budget=spent > budget.monthly_limit,
+    )
+
+
+def get_budget_or_404(session: Session, category: str) -> Budget:
+    budget = session.exec(select(Budget).where(Budget.category_key == category_key(category))).first()
+    if not budget:
+        raise HTTPException(status_code=404, detail="Budget not found")
+    return budget
+
+
+@app.get("/budgets", response_model=BudgetOverview)
+def read_budgets(month: Optional[str] = MONTH_QUERY, session: Session = Depends(get_session)):
+    """Every budget with spent / remaining for the month, plus overall totals.
+
+    Budgets are listed alphabetically. unbudgeted_spent is spending that month
+    in categories without a budget.
+    """
+    month, first, last = month_bounds(month)
+    spending = spending_by_category(session, first, last)
+    budgets = session.exec(select(Budget).order_by(Budget.category_key)).all()
+
+    statuses = [budget_status(b, month, spending.get(b.category_key, Decimal("0.00"))) for b in budgets]
+    budgeted_keys = {b.category_key for b in budgets}
+    total_limit = sum((b.monthly_limit for b in budgets), Decimal("0.00"))
+    total_spent = sum((s.spent for s in statuses), Decimal("0.00"))
+
+    return BudgetOverview(
+        month=month,
+        total_limit=total_limit,
+        total_spent=total_spent,
+        total_remaining=total_limit - total_spent,
+        unbudgeted_spent=sum(
+            (amount for key, amount in spending.items() if key not in budgeted_keys), Decimal("0.00")
+        ),
+        budgets=statuses,
+    )
+
+
+@app.get("/budgets/{category}", response_model=BudgetStatus)
+def read_budget(
+    category: str = CATEGORY_PATH,
+    month: Optional[str] = MONTH_QUERY,
+    session: Session = Depends(get_session),
+):
+    budget = get_budget_or_404(session, category)
+    month, first, last = month_bounds(month)
+    spent = spending_by_category(session, first, last).get(budget.category_key, Decimal("0.00"))
+    return budget_status(budget, month, spent)
+
+
+@app.put("/budgets/{category}", response_model=BudgetRead)
+def set_budget(
+    budget_in: BudgetSet,
+    response: Response,
+    category: str = CATEGORY_PATH,
+    session: Session = Depends(get_session),
+):
+    """Create (201) or replace (200) the monthly limit for a category."""
+    key = category_key(category)
+    budget = session.exec(select(Budget).where(Budget.category_key == key)).first()
+    if budget:
+        budget.monthly_limit = budget_in.monthly_limit
+        budget.category = category.strip()  # use the latest spelling, e.g. "food" -> "Food"
+        response.status_code = 200
+    else:
+        budget = Budget(category=category.strip(), category_key=key, monthly_limit=budget_in.monthly_limit)
+        response.status_code = 201
+    session.add(budget)
+    session.commit()
+    session.refresh(budget)
+    return budget
+
+
+@app.delete("/budgets/{category}", status_code=204)
+def delete_budget(category: str = CATEGORY_PATH, session: Session = Depends(get_session)):
+    session.delete(get_budget_or_404(session, category))
     session.commit()

@@ -63,6 +63,44 @@ class SummaryGroup(SQLModel):
     count: int
 
 
+class Budget(SQLModel, table=True):
+    """A monthly spending limit for one category. Applies to every month."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    category: str = Field(max_length=50)  # display spelling, e.g. "Food"
+    # Lowercased category, so "Food" and "food" share one budget.
+    category_key: str = Field(index=True, unique=True, max_length=50)
+    monthly_limit: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
+
+
+class BudgetSet(SQLModel):
+    monthly_limit: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
+
+
+class BudgetRead(SQLModel):
+    category: str
+    monthly_limit: Decimal
+
+
+class BudgetStatus(SQLModel):
+    category: str
+    month: str  # "YYYY-MM"
+    monthly_limit: Decimal
+    spent: Decimal
+    remaining: Decimal  # negative when over budget
+    percent_used: float  # spent / limit * 100, 1 decimal place
+    over_budget: bool
+
+
+class BudgetOverview(SQLModel):
+    month: str
+    total_limit: Decimal
+    total_spent: Decimal  # spending in budgeted categories
+    total_remaining: Decimal
+    unbudgeted_spent: Decimal  # spending in categories with no budget
+    budgets: list[BudgetStatus]
+
+
 class ExpenseSummary(SQLModel):
     group_by: Literal["category", "month"]
     q: Optional[str] = None

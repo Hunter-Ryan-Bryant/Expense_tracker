@@ -32,7 +32,8 @@ Expense_tracker/
 ├── models.py               # SQLModel table and Pydantic request/response schemas
 ├── database.py             # SQLite engine and session setup
 ├── conftest.py             # pytest fixtures: in-memory SQLite + dependency override
-├── test_expenses.py        # API test suite
+├── test_expenses.py        # Expense, summary, search and export tests
+├── test_budgets.py         # Monthly budget tests
 ├── manual_smoke_check.py   # Manual check against a running server: python manual_smoke_check.py
 ├── requirements.txt
 ├── README.md
@@ -49,6 +50,10 @@ Expense_tracker/
 | `GET` | `/expenses/` | `200` | List expenses (query parameters below) |
 | `GET` | `/expenses/summary` | `200` | Totals and counts, overall and per category or month ([details](#spending-summary)) |
 | `GET` | `/expenses/export.csv` | `200` | Download matching expenses as a CSV file ([details](#csv-export)) |
+| `GET` | `/budgets` | `200` | Every budget with spent / remaining for a month, plus totals ([details](#monthly-budgets)) |
+| `GET` | `/budgets/{category}` | `200` | One category's budget status for a month (404 if no budget) |
+| `PUT` | `/budgets/{category}` | `201` / `200` | Create (201) or replace (200) a category's monthly limit |
+| `DELETE` | `/budgets/{category}` | `204` | Remove a budget; its expenses are kept (404 if missing) |
 | `GET` | `/expenses/{id}` | `200` | Fetch one expense (404 if missing) |
 | `PATCH` | `/expenses/{id}` | `200` | Update only the fields you send (404 if missing) |
 | `DELETE` | `/expenses/{id}` | `204` | Delete an expense; empty response body (404 if missing) |
@@ -138,6 +143,41 @@ id,title,amount,category,date_incurred
 - **Amounts** are exact, with 2 decimals.
 - **Excel-friendly:** the file is UTF-8 with a byte-order mark (BOM) so Excel shows accents and emoji correctly. Commas, quotes and line breaks inside titles are quoted properly.
 - **Formula safety:** text that a spreadsheet would run as a formula, meaning it starts with `=`, `+`, `-` or `@`, gets a leading `'` so it displays as plain text. This guards against CSV injection.
+
+### Monthly budgets
+
+Set a monthly spending limit for a category. The same limit applies every month:
+
+```
+PUT /budgets/Food
+{ "monthly_limit": "200.00" }
+```
+
+Then see how each budget is doing for a month. Leave out `month` to get the current month:
+
+```jsonc
+// GET /budgets?month=2026-10
+{
+  "month": "2026-10",
+  "total_limit": "250.00",
+  "total_spent": "260.25",
+  "total_remaining": "-10.25",
+  "unbudgeted_spent": "30.00",   // spending in categories with no budget
+  "budgets": [
+    { "category": "Food", "month": "2026-10", "monthly_limit": "200.00", "spent": "200.25",
+      "remaining": "-0.25", "percent_used": 100.1, "over_budget": true },
+    { "category": "Fun", "month": "2026-10", "monthly_limit": "50.00", "spent": "60.00",
+      "remaining": "-10.00", "percent_used": 120.0, "over_budget": true }
+  ]
+}
+```
+
+- **Case-insensitive categories:** `/budgets/food` and `/budgets/Food` are the same budget, and it counts expenses in "Food", "food" and so on. Setting it again keeps the latest spelling you used.
+- **Exact amounts:** spent and remaining are exact. `remaining` goes negative when you're over budget, and spending exactly the limit isn't over.
+- **`percent_used`** is a number rounded to 1 decimal place.
+- **Months** use the `YYYY-MM` format and include every day of the month, leap days too.
+- **Deleting a budget** never deletes expenses. That spending simply counts as unbudgeted.
+- **No migration:** the `budget` table is created automatically on startup, and existing databases keep all their expenses.
 
 Interactive docs are generated automatically at `/docs` once the server is running.
 
