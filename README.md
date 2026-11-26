@@ -79,6 +79,7 @@ With `PATCH`, leave a field out to keep its current value. Sending `null` is rej
 
 | Parameter | Default | Notes |
 |---|---|---|
+| `q` | none | Search titles: case-insensitive "contains" match, up to 100 characters. `coffee` matches "Morning Coffee" and "Iced COFFEE". `%` and `_` are matched literally |
 | `category` | none | Case-insensitive: `food` matches `Food` |
 | `start_date`, `end_date` | none | Inclusive; `start_date` must not be after `end_date` |
 | `sort_by` | `date_incurred` | `date_incurred` or `amount` |
@@ -97,11 +98,12 @@ GET /expenses/summary?category=food&start_date=2026-10-01&end_date=2026-10-31
 | Parameter | Default | Notes |
 |---|---|---|
 | `group_by` | `category` | `category` or `month` |
-| `category`, `start_date`, `end_date` | none | Same filters as the list endpoint |
+| `q`, `category`, `start_date`, `end_date` | none | Same filters as the list endpoint. For example, `?q=coffee` answers "how much have I spent on coffee?" |
 
 ```json
 {
   "group_by": "category",
+  "q": null,
   "category": null,
   "start_date": null,
   "end_date": null,

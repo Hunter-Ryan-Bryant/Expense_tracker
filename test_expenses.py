@@ -252,6 +252,7 @@ def test_summary_when_empty(client):
     assert res.status_code == 200
     assert res.json() == {
         "group_by": "category",
+        "q": None,
         "category": None,
         "start_date": None,
         "end_date": None,
@@ -341,3 +342,94 @@ def test_summary_route_does_not_break_get_by_id(client):
 
     assert client.get("/expenses/summary").status_code == 200
     assert client.get(f"/expenses/{expense['id']}").json() == expense
+
+
+# ---------- search ----------
+
+def titles(client, **params):
+    res = client.get("/expenses/", params={"sort_by": "amount", "order": "asc", **params})
+    assert res.status_code == 200
+    return [e["title"] for e in res.json()]
+
+
+def test_search_matches_part_of_title_ignoring_case(client):
+    add(client, "Morning Coffee", 4.5)
+    add(client, "coffee beans", 12)
+    add(client, "Iced COFFEE", 6)
+    add(client, "Tea", 3)
+
+    assert titles(client, q="coffee") == ["Morning Coffee", "Iced COFFEE", "coffee beans"]
+    assert titles(client, q="CoFf") == ["Morning Coffee", "Iced COFFEE", "coffee beans"]
+    assert titles(client, q="ning cof") == ["Morning Coffee"]
+
+
+def test_search_with_no_matches(client):
+    add(client, "Tea", 3)
+    assert titles(client, q="pizza") == []
+
+
+def test_blank_search_is_ignored(client):
+    add(client, "Tea", 3)
+    add(client, "Coffee", 4)
+
+    assert titles(client, q="") == ["Tea", "Coffee"]
+    assert titles(client, q="   ") == ["Tea", "Coffee"]
+
+
+def test_search_text_is_trimmed(client):
+    add(client, "Coffee", 4)
+    assert titles(client, q="  coffee  ") == ["Coffee"]
+
+
+@pytest.mark.parametrize(
+    "q, expected",
+    [
+        ("%", ["50% off sale"]),  # % is literal, not "match anything"
+        ("_", ["file_name"]),  # _ is literal, not "any one character"
+        ("\\", ["back\\slash"]),
+        ("50%", ["50% off sale"]),
+    ],
+)
+def test_search_treats_wildcards_literally(client, q, expected):
+    add(client, "50% off sale", 1)
+    add(client, "file_name", 2)
+    add(client, "back\\slash", 3)
+    add(client, "plain", 4)
+
+    assert titles(client, q=q) == expected
+
+
+def test_search_combines_with_other_filters(client):
+    add(client, "Coffee", 4, "Food", "2026-10-05")
+    add(client, "Coffee", 5, "Food", "2026-11-05")  # wrong month
+    add(client, "Coffee maker", 60, "Home", "2026-10-06")  # wrong category
+    add(client, "Bagel", 3, "Food", "2026-10-07")  # doesn't match
+
+    res = client.get(
+        "/expenses/",
+        params={"q": "coffee", "category": "food", "start_date": "2026-10-01", "end_date": "2026-10-31"},
+    ).json()
+
+    assert [(e["title"], e["amount"]) for e in res] == [("Coffee", "4.00")]
+
+
+def test_search_is_limited_to_100_characters(client):
+    assert client.get("/expenses/", params={"q": "x" * 100}).status_code == 200
+    assert client.get("/expenses/", params={"q": "x" * 101}).status_code == 422
+
+
+def test_summary_supports_search(client):
+    """How much have I spent on coffee?"""
+    add(client, "Morning Coffee", "4.50", "Food")
+    add(client, "Coffee beans", "12.25", "Groceries")
+    add(client, "Tea", "3.00", "Food")
+
+    data = client.get("/expenses/summary", params={"q": "coffee"}).json()
+
+    assert data["q"] == "coffee"
+    assert data["total"] == "16.75"
+    assert data["count"] == 2
+    assert data["groups"] == [
+        {"key": "Groceries", "total": "12.25", "count": 1},
+        {"key": "Food", "total": "4.50", "count": 1},
+    ]
