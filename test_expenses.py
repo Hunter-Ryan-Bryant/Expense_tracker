@@ -236,3 +236,108 @@ def test_tests_never_touch_the_real_database():
     import database
 
     assert database.engine.url.database in (None, "", ":memory:")
+
+
+# ---------- summary ----------
+
+def add(client, title, amount, category="General", day="2026-10-15"):
+    res = client.post("/expenses/", json={"title": title, "amount": amount, "category": category, "date_incurred": day})
+    assert res.status_code == 201
+    return res.json()
+
+
+def test_summary_when_empty(client):
+    res = client.get("/expenses/summary")
+
+    assert res.status_code == 200
+    assert res.json() == {
+        "group_by": "category",
+        "category": None,
+        "start_date": None,
+        "end_date": None,
+        "total": "0.00",
+        "count": 0,
+        "groups": [],
+    }
+
+
+def test_summary_by_category_is_exact_and_sorted_by_total(client):
+    add(client, "Coffee", "0.10", "Food")
+    add(client, "Snack", "0.20", "Food")
+    add(client, "Gas", "40.00", "Transport")
+    add(client, "Book", "12.50", "School")
+
+    data = client.get("/expenses/summary").json()
+
+    assert data["total"] == "52.80"
+    assert data["count"] == 4
+    assert data["groups"] == [
+        {"key": "Transport", "total": "40.00", "count": 1},
+        {"key": "School", "total": "12.50", "count": 1},
+        {"key": "Food", "total": "0.30", "count": 2},  # exact: floats would give 0.30000000000000004
+    ]
+
+
+def test_summary_ties_are_sorted_by_name(client):
+    add(client, "B", 5, "Beta")
+    add(client, "A", 5, "alpha")
+
+    keys = [g["key"] for g in client.get("/expenses/summary").json()["groups"]]
+    assert keys == ["alpha", "Beta"]
+
+
+def test_summary_groups_categories_case_insensitively(client):
+    add(client, "Latte", 5, "Food")
+    add(client, "Bagel", 3, "food")
+    add(client, "Tea", 2, "FOOD")
+
+    groups = client.get("/expenses/summary").json()["groups"]
+
+    assert groups == [{"key": "Food", "total": "10.00", "count": 3}]  # first-used spelling
+
+
+def test_summary_by_month_in_date_order(client):
+    add(client, "Nov", 7, day="2026-11-02")
+    add(client, "Sep", 1, day="2026-09-30")
+    add(client, "Oct A", 2, day="2026-10-01")
+    add(client, "Oct B", 3, day="2026-10-31")
+
+    data = client.get("/expenses/summary?group_by=month").json()
+
+    assert data["group_by"] == "month"
+    assert data["groups"] == [
+        {"key": "2026-09", "total": "1.00", "count": 1},
+        {"key": "2026-10", "total": "5.00", "count": 2},
+        {"key": "2026-11", "total": "7.00", "count": 1},
+    ]
+
+
+def test_summary_answers_food_in_october(client):
+    """How much did I spend on food in October?"""
+    add(client, "Latte", "4.50", "Food", "2026-10-03")
+    add(client, "Lunch", "12.25", "Food", "2026-10-20")
+    add(client, "Late lunch", "9.00", "Food", "2026-11-01")  # outside the range
+    add(client, "Gas", "40.00", "Transport", "2026-10-10")  # other category
+
+    data = client.get(
+        "/expenses/summary", params={"category": "food", "start_date": "2026-10-01", "end_date": "2026-10-31"}
+    ).json()
+
+    assert data["total"] == "16.75"
+    assert data["count"] == 2
+    assert data["category"] == "food"
+    assert data["start_date"] == "2026-10-01"
+    assert data["end_date"] == "2026-10-31"
+
+
+@pytest.mark.parametrize("query", ["group_by=week", "group_by=", "start_date=2026-10-31&end_date=2026-10-01"])
+def test_summary_rejects_bad_query_params(client, query):
+    assert client.get(f"/expenses/summary?{query}").status_code == 422
+
+
+def test_summary_route_does_not_break_get_by_id(client):
+    """/expenses/summary must not be treated as /expenses/{id}, and vice versa."""
+    expense = add(client, "Lunch", 12)
+
+    assert client.get("/expenses/summary").status_code == 200
+    assert client.get(f"/expenses/{expense['id']}").json() == expense

@@ -1,6 +1,6 @@
 from datetime import date
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import field_validator
 from sqlmodel import Field, SQLModel
@@ -53,3 +53,21 @@ class ExpenseUpdate(SQLModel):
         if value is None:
             raise ValueError("can't be null; leave the field out to keep its current value")
         return _strip(value)
+
+
+class SummaryGroup(SQLModel):
+    """Totals for one category (e.g. "Food") or one month (e.g. "2026-10")."""
+
+    key: str
+    total: Decimal
+    count: int
+
+
+class ExpenseSummary(SQLModel):
+    group_by: Literal["category", "month"]
+    category: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    total: Decimal
+    count: int
+    groups: list[SummaryGroup]
