@@ -43,19 +43,47 @@ Expense_tracker/
 
 ## 🔌 API Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/expenses/` | Create an expense (`amount` must be > 0) |
-| `GET` | `/expenses/` | List expenses. Query params: `category`, `start_date`, `end_date`, `sort_by` (`date_incurred` or `amount`), `order` (`asc` or `desc`), `limit`, `offset` |
-| `GET` | `/expenses/{id}` | Fetch one expense (404 if missing) |
-| `PATCH` | `/expenses/{id}` | Update only the fields you send (`amount` must be > 0) |
-| `DELETE` | `/expenses/{id}` | Delete an expense (404 if missing) |
+| Method | Path | Success | Description |
+|---|---|---|---|
+| `POST` | `/expenses/` | `201` | Create an expense |
+| `GET` | `/expenses/` | `200` | List expenses (query parameters below) |
+| `GET` | `/expenses/{id}` | `200` | Fetch one expense (404 if missing) |
+| `PATCH` | `/expenses/{id}` | `200` | Update only the fields you send (404 if missing) |
+| `DELETE` | `/expenses/{id}` | `204` | Delete an expense; empty response body (404 if missing) |
 
-Example expense body:
+Invalid input returns `422` with details about which field is wrong.
 
-```json
+### Expense fields
+
+| Field | Rules |
+|---|---|
+| `title` | Required, 1–200 characters (surrounding spaces are trimmed) |
+| `amount` | Required, greater than 0, at most 2 decimal places and 10 digits |
+| `category` | Optional, 1–50 characters, defaults to `"General"` |
+| `date_incurred` | Optional `YYYY-MM-DD`, defaults to today |
+
+**Amounts are exact.** They're stored as decimals rather than floats, so `0.10 + 0.20` is exactly `0.30`. Responses send them as strings with 2 decimals, for example `"4.50"`. Requests can send either `4.5` or `"4.50"`.
+
+With `PATCH`, leave a field out to keep its current value. Sending `null` is rejected.
+
+```jsonc
+// POST /expenses/
 { "title": "Morning Coffee", "amount": 4.50, "category": "Food", "date_incurred": "2026-10-17" }
+
+// 201 Created
+{ "id": 1, "title": "Morning Coffee", "amount": "4.50", "category": "Food", "date_incurred": "2026-10-17" }
 ```
+
+### List query parameters
+
+| Parameter | Default | Notes |
+|---|---|---|
+| `category` | none | Case-insensitive: `food` matches `Food` |
+| `start_date`, `end_date` | none | Inclusive; `start_date` must not be after `end_date` |
+| `sort_by` | `date_incurred` | `date_incurred` or `amount` |
+| `order` | `desc` | `asc` or `desc` |
+| `limit` | `100` | 1–500 |
+| `offset` | `0` | 0 or more |
 
 Interactive docs are generated automatically at `/docs` once the server is running.
 
@@ -77,7 +105,7 @@ Run the server:
 uvicorn main:app --reload
 ```
 
-Then open http://127.0.0.1:8000/docs. The SQLite database (`expenses.db`) is created automatically on first startup.
+Then open http://127.0.0.1:8000/docs. The SQLite database (`expenses.db`) is created automatically on first startup, next to `main.py`, no matter which folder you start the server from. To use a different database, set `EXPENSES_DATABASE_URL`, for example `sqlite:///C:/data/expenses.db`.
 
 ---
 
