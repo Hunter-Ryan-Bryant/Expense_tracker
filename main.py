@@ -1,9 +1,11 @@
+import csv
+import io
 from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
 from typing import Literal, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from sqlmodel import Session, asc, desc, func, select
 
 from database import create_db_and_tables, get_session
@@ -66,6 +68,22 @@ def apply_filters(
     return statement
 
 
+def apply_sort(statement, sort_by: str, order: str):
+    sort_column = Expense.amount if sort_by == "amount" else Expense.date_incurred
+    direction = desc if order == "desc" else asc
+    # id breaks ties so pagination is stable when amounts or dates are equal.
+    return statement.order_by(direction(sort_column), direction(Expense.id))
+
+
+# Spreadsheets run cells starting with these as formulas (CSV injection).
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def spreadsheet_safe(text: str) -> str:
+    """Prefix text that a spreadsheet would treat as a formula so it shows as plain text."""
+    return "'" + text if text.startswith(FORMULA_PREFIXES) else text
+
+
 @app.post("/expenses/", response_model=ExpenseRead, status_code=201)
 def create_expense(expense: ExpenseCreate, session: Session = Depends(get_session)):
     db_expense = Expense.model_validate(expense)
@@ -91,13 +109,51 @@ def read_expenses(
     session: Session = Depends(get_session),
 ):
     statement = apply_filters(select(Expense), category, start_date, end_date, clean_search(q))
-
-    sort_column = Expense.amount if sort_by == "amount" else Expense.date_incurred
-    direction = desc if order == "desc" else asc
-    # id breaks ties so pagination is stable when amounts or dates are equal.
-    statement = statement.order_by(direction(sort_column), direction(Expense.id))
-
+    statement = apply_sort(statement, sort_by, order)
     return session.exec(statement.offset(offset).limit(limit)).all()
+
+
+CSV_COLUMNS = ["id", "title", "amount", "category", "date_incurred"]
+
+
+# Must be registered before /expenses/{expense_id}, or "export.csv" is parsed as an id.
+@app.get(
+    "/expenses/export.csv",
+    response_class=Response,
+    responses={200: {"content": {"text/csv": {}}, "description": "CSV file of matching expenses"}},
+)
+def export_expenses_csv(
+    q: Optional[str] = SEARCH_QUERY,
+    category: Optional[str] = Query(None, description="Case-insensitive match"),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    sort_by: Literal["date_incurred", "amount"] = "date_incurred",
+    order: Literal["asc", "desc"] = "desc",
+    session: Session = Depends(get_session),
+):
+    """Download every matching expense as CSV (same filters as the list, no paging).
+
+    Built in memory rather than streamed: FastAPI closes the database session
+    before a streamed response finishes. Starts with a UTF-8 BOM so Excel shows
+    accents and emoji correctly.
+    """
+    statement = apply_filters(select(Expense), category, start_date, end_date, clean_search(q))
+    expenses = session.exec(apply_sort(statement, sort_by, order)).all()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)  # RFC 4180: quotes commas/quotes/newlines, \r\n line endings
+    writer.writerow(CSV_COLUMNS)
+    for e in expenses:
+        writer.writerow(
+            [e.id, spreadsheet_safe(e.title), f"{e.amount:.2f}", spreadsheet_safe(e.category), e.date_incurred.isoformat()]
+        )
+
+    filename = f"expenses-{date.today().isoformat()}.csv"
+    return Response(
+        content=buffer.getvalue().encode("utf-8-sig"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # Must be registered before /expenses/{expense_id}, or "summary" is parsed as an id.
