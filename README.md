@@ -47,6 +47,7 @@ Expense_tracker/
 |---|---|---|---|
 | `POST` | `/expenses/` | `201` | Create an expense |
 | `GET` | `/expenses/` | `200` | List expenses (query parameters below) |
+| `GET` | `/expenses/summary` | `200` | Totals and counts, overall and per category or month ([details](#spending-summary)) |
 | `GET` | `/expenses/{id}` | `200` | Fetch one expense (404 if missing) |
 | `PATCH` | `/expenses/{id}` | `200` | Update only the fields you send (404 if missing) |
 | `DELETE` | `/expenses/{id}` | `204` | Delete an expense; empty response body (404 if missing) |
@@ -84,6 +85,40 @@ With `PATCH`, leave a field out to keep its current value. Sending `null` is rej
 | `order` | `desc` | `asc` or `desc` |
 | `limit` | `100` | 1–500 |
 | `offset` | `0` | 0 or more |
+
+### Spending summary
+
+`GET /expenses/summary` answers questions like "how much did I spend on food in October?":
+
+```
+GET /expenses/summary?category=food&start_date=2026-10-01&end_date=2026-10-31
+```
+
+| Parameter | Default | Notes |
+|---|---|---|
+| `group_by` | `category` | `category` or `month` |
+| `category`, `start_date`, `end_date` | none | Same filters as the list endpoint |
+
+```json
+{
+  "group_by": "category",
+  "category": null,
+  "start_date": null,
+  "end_date": null,
+  "total": "52.80",
+  "count": 4,
+  "groups": [
+    { "key": "Transport", "total": "40.00", "count": 1 },
+    { "key": "School", "total": "12.50", "count": 1 },
+    { "key": "Food", "total": "0.30", "count": 2 }
+  ]
+}
+```
+
+- **Exact totals:** amounts are added as decimals, so `0.10 + 0.20` is exactly `"0.30"`.
+- **By category:** groups go from largest total to smallest. Categories are matched ignoring case, so `Food` and `food` are one group, shown with the first spelling used.
+- **By month:** keys look like `"2026-10"` and go in date order.
+- **Nothing found:** you get `"total": "0.00"`, `"count": 0` and an empty `groups` list.
 
 Interactive docs are generated automatically at `/docs` once the server is running.
 

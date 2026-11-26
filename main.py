@@ -1,12 +1,20 @@
 from contextlib import asynccontextmanager
 from datetime import date
+from decimal import Decimal
 from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlmodel import Session, asc, desc, func, select
 
 from database import create_db_and_tables, get_session
-from models import Expense, ExpenseCreate, ExpenseRead, ExpenseUpdate
+from models import (
+    Expense,
+    ExpenseCreate,
+    ExpenseRead,
+    ExpenseSummary,
+    ExpenseUpdate,
+    SummaryGroup,
+)
 
 
 @asynccontextmanager
@@ -23,6 +31,19 @@ def get_expense_or_404(session: Session, expense_id: int) -> Expense:
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
     return expense
+
+
+def apply_filters(statement, category: Optional[str], start_date: Optional[date], end_date: Optional[date]):
+    """Category (case-insensitive) and inclusive date-range filters shared by list and summary."""
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
+    if category:
+        statement = statement.where(func.lower(Expense.category) == category.strip().lower())
+    if start_date:
+        statement = statement.where(Expense.date_incurred >= start_date)
+    if end_date:
+        statement = statement.where(Expense.date_incurred <= end_date)
+    return statement
 
 
 @app.post("/expenses/", response_model=ExpenseRead, status_code=201)
@@ -45,16 +66,7 @@ def read_expenses(
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_session),
 ):
-    if start_date and end_date and start_date > end_date:
-        raise HTTPException(status_code=422, detail="start_date must be on or before end_date")
-
-    statement = select(Expense)
-    if category:
-        statement = statement.where(func.lower(Expense.category) == category.strip().lower())
-    if start_date:
-        statement = statement.where(Expense.date_incurred >= start_date)
-    if end_date:
-        statement = statement.where(Expense.date_incurred <= end_date)
+    statement = apply_filters(select(Expense), category, start_date, end_date)
 
     sort_column = Expense.amount if sort_by == "amount" else Expense.date_incurred
     direction = desc if order == "desc" else asc
@@ -62,6 +74,51 @@ def read_expenses(
     statement = statement.order_by(direction(sort_column), direction(Expense.id))
 
     return session.exec(statement.offset(offset).limit(limit)).all()
+
+
+# Must be registered before /expenses/{expense_id}, or "summary" is parsed as an id.
+@app.get("/expenses/summary", response_model=ExpenseSummary)
+def summarize_expenses(
+    group_by: Literal["category", "month"] = "category",
+    category: Optional[str] = Query(None, description="Case-insensitive match"),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    session: Session = Depends(get_session),
+):
+    """Total spent and number of expenses, overall and per category or month.
+
+    Totals are added up in Python with Decimal so they're exact (SQLite would
+    sum them as floats). Categories are grouped case-insensitively, shown with
+    their first-used spelling, and sorted by total (largest first); months are
+    "YYYY-MM" in date order.
+    """
+    statement = select(Expense.category, Expense.date_incurred, Expense.amount).order_by(Expense.id)
+    rows = session.exec(apply_filters(statement, category, start_date, end_date)).all()
+
+    groups: dict[str, dict] = {}
+    for row_category, row_date, amount in rows:
+        if group_by == "month":
+            group_id = label = row_date.strftime("%Y-%m")
+        else:
+            group_id, label = row_category.lower(), row_category
+        group = groups.setdefault(group_id, {"key": label, "total": Decimal("0.00"), "count": 0})
+        group["total"] += amount
+        group["count"] += 1
+
+    if group_by == "month":
+        ordered = sorted(groups.values(), key=lambda g: g["key"])
+    else:
+        ordered = sorted(groups.values(), key=lambda g: (-g["total"], g["key"].lower()))
+
+    return ExpenseSummary(
+        group_by=group_by,
+        category=category.strip() if category else None,
+        start_date=start_date,
+        end_date=end_date,
+        total=sum((g["total"] for g in ordered), Decimal("0.00")),
+        count=len(rows),
+        groups=[SummaryGroup(**g) for g in ordered],
+    )
 
 
 @app.get("/expenses/{expense_id}", response_model=ExpenseRead)
